@@ -1,0 +1,739 @@
+*----------------------------------------------------------------------*
+* SondaProcwork                                                        *
+* Cliente            :  Brasvending                                    *
+* Módulo             :  MM  e  FI                                      *
+* Transações         :                                                 *
+*                    :                                                 *
+* Descrição          :  Inventário de Estoques em Clientes             *
+*----------------------------------------------------------------------*
+* Nome do Consultor       Data               Descrição                 *
+* Ralph Nova              08/02/2010         Codificação inicial       *
+*----------------------------------------------------------------------*
+* Descritivo do GAP  :  Relatório - Inventário de Estoques em Clientes *
+*----------------------------------------------------------------------*
+REPORT zpmmr_005.
+
+*-----------------------------------------------------------------------
+* Definição de Tipos
+*-----------------------------------------------------------------------
+TYPE-POOLS:
+  slis. "Grupo de tipos alv
+
+*-----------------------------------------------------------------------
+* Types
+*-----------------------------------------------------------------------
+TYPES: BEGIN OF ty_dados,
+        werks  TYPE mchb-werks,
+        lgort  TYPE mchb-lgort,
+        charg  TYPE mchb-charg,
+        chdll  TYPE mchb-chdll,
+        bldat  TYPE ztbmm_004-bldat,
+        matnr  TYPE mchb-matnr,
+        maktg  TYPE makt-maktg,
+        clabs  TYPE ztbmm_005-clabs,
+        erfmg  TYPE ztbmm_005-erfmg,
+        meins  TYPE ztbmm_005-meins,
+      END OF ty_dados.
+
+*-----------------------------------------------------------------------
+* Tabelas internas
+*-----------------------------------------------------------------------
+DATA: t_ztbmm_004    TYPE TABLE OF ztbmm_004 WITH HEADER LINE,
+      t_ztbmm_005    TYPE TABLE OF ztbmm_005 WITH HEADER LINE,
+      t_mchb         TYPE TABLE OF mchb      WITH HEADER LINE,
+      t_makt         TYPE TABLE OF makt      WITH HEADER LINE,
+      t_mara         TYPE TABLE OF mara      WITH HEADER LINE,
+      t_dados        TYPE TABLE OF ty_dados  WITH HEADER LINE,
+      t_dados_ant    TYPE TABLE OF ty_dados  WITH HEADER LINE.
+
+*-----------------------------------------------------------------------
+* Variáveis
+*-----------------------------------------------------------------------
+DATA: v_okcode      TYPE sy-ucomm,
+      v_erro        TYPE c,
+      v_chdll_c(10) TYPE c,
+      v_bldat_c(10) TYPE c,
+      v_werks_c(5)  TYPE c,
+      v_lgort_c(5)  TYPE c,
+      v_charg_c(11) TYPE c.
+
+*----------------------------------------------------------------------*
+* Declarações para o ALV
+*----------------------------------------------------------------------*
+DATA: gr_container_d0100   TYPE REF TO cl_gui_custom_container,
+      gr_grid_d0100        TYPE REF TO cl_gui_alv_grid,
+      t_fcat               TYPE lvc_t_fcat,
+      wa_fcat              TYPE lvc_s_fcat.
+
+*-----------------------------------------------------------------------
+* Definição de Includes
+*-----------------------------------------------------------------------
+INCLUDE zpmmi_005.
+
+*----------------------------------------------------------------------*
+* Tela de seleção
+*----------------------------------------------------------------------*
+PARAMETERS: p_chdll        TYPE mchb-chdll      OBLIGATORY,
+            p_bldat        TYPE ztbmm_004-bldat OBLIGATORY,
+            p_werks        TYPE mchb-werks      OBLIGATORY,
+            p_lgort        TYPE mchb-lgort      OBLIGATORY,
+            p_charg        TYPE mchb-charg      OBLIGATORY.
+
+*-----------------------------------------------------------------------
+* Inicio de processamento.
+*-----------------------------------------------------------------------
+START-OF-SELECTION.
+
+* Preenche os campos do header da tela
+  CLEAR: v_chdll_c,
+         v_bldat_c,
+         v_werks_c,
+         v_lgort_c,
+         v_charg_c.
+
+  CONCATENATE p_chdll+6(2)
+              '.'
+              p_chdll+4(2)
+              '.'
+              p_chdll(4)
+         INTO v_chdll_c.
+
+  CONCATENATE p_bldat+6(2)
+            '.'
+            p_bldat+4(2)
+            '.'
+            p_bldat(4)
+       INTO v_bldat_c.
+
+  v_werks_c = p_werks.
+  v_lgort_c = p_lgort.
+  v_charg_c = p_charg.
+
+* Seleção dos campos
+  PERFORM seleciona_dados.
+
+* Processamento dos dados
+  PERFORM processa_dados.
+
+* Monta fieldcat
+  PERFORM monta_fieldcat_alv.
+
+* Chama a tela onde será impresso o ALV
+  CALL SCREEN 100.
+
+*&---------------------------------------------------------------------*
+*&      Form  seleciona_dados
+*&---------------------------------------------------------------------*
+*       Seleção dos dados
+*----------------------------------------------------------------------*
+FORM seleciona_dados.
+
+* Seleciona os dados da tabela ztbmm_004(HEADER)
+  REFRESH: t_ztbmm_004[].
+  SELECT *
+    FROM ztbmm_004
+    INTO TABLE t_ztbmm_004
+    WHERE werks = p_werks
+      AND lgort = p_lgort
+      AND charg = p_charg
+      AND chdll = p_chdll
+      AND bldat = p_bldat.
+
+  IF sy-subrc IS INITIAL.
+
+* Seleciona os dados da tabela ztbmm_005(DETALHES) a partir da tabela
+* t_ztbmm_004
+    REFRESH: t_ztbmm_005[].
+    SELECT *
+      FROM ztbmm_005
+      INTO TABLE t_ztbmm_005
+      FOR ALL ENTRIES IN t_ztbmm_004
+      WHERE werks = t_ztbmm_004-werks
+        AND lgort = t_ztbmm_004-lgort
+        AND charg = t_ztbmm_004-charg
+        AND chdll = t_ztbmm_004-chdll.
+
+  ELSE.
+
+* Se não encontrou nenhum dado na tabela ztbmm_004 então carregar os
+* dados da tabela standard MCHB
+    REFRESH t_mchb[].
+    SELECT *
+      FROM mchb
+      INTO TABLE t_mchb
+      WHERE werks = p_werks
+        AND lgort = p_lgort
+        AND charg = p_charg
+*        AND chdll = p_chdll
+        AND clabs > 0.
+
+    IF NOT sy-subrc IS INITIAL.
+
+* Mensagem de erro
+* Dados para Inventários de Produtos não existentes!
+      MESSAGE e000(z001) WITH text-001.
+
+    ENDIF.
+
+  ENDIF.
+
+* Seleciona descrição dos materiais
+  IF NOT t_ztbmm_005[] IS INITIAL.
+
+    REFRESH t_makt[].
+    SELECT *
+      FROM makt
+      INTO TABLE t_makt
+      FOR ALL ENTRIES IN t_ztbmm_005
+      WHERE matnr = t_ztbmm_005-matnr
+        AND spras = sy-langu.
+
+  ELSEIF NOT t_mchb[] IS INITIAL.
+
+    REFRESH t_makt[].
+    SELECT *
+      FROM makt
+      INTO TABLE t_makt
+      FOR ALL ENTRIES IN t_mchb
+      WHERE matnr = t_mchb-matnr
+        AND spras = sy-langu.
+
+  ENDIF.
+
+* Seleciona tabela MARA para buscar unidade de medida
+  IF NOT t_mchb[] IS INITIAL.
+
+    REFRESH t_mara[].
+    SELECT *
+      FROM mara
+      INTO TABLE t_mara
+      FOR ALL ENTRIES IN t_mchb
+      WHERE matnr = t_mchb-matnr.
+
+  ENDIF.
+
+ENDFORM.                    " seleciona_dados
+
+*&---------------------------------------------------------------------*
+*&      Form  processa_dados
+*&---------------------------------------------------------------------*
+*       Processamento dos Dados
+*----------------------------------------------------------------------*
+FORM processa_dados.
+
+  IF NOT t_ztbmm_004[] IS INITIAL.
+
+* Monta dados a partir da tabela ztbmm_004
+    PERFORM monta_dados_ztbmm_004.
+
+  ELSE.
+
+* Monta dados a partir da tabela mchb
+    PERFORM monta_dados_mchb.
+
+  ENDIF.
+
+ENDFORM.                    " processa_dados
+
+*&---------------------------------------------------------------------*
+*&      Form  monta_dados_ztbmm_004
+*&---------------------------------------------------------------------*
+*       Monta dados a partir da tabela ztbmm_004
+*----------------------------------------------------------------------*
+FORM monta_dados_ztbmm_004.
+
+  SORT: t_ztbmm_004 BY werks lgort charg chdll,
+        t_makt      BY matnr.
+
+  REFRESH t_dados[].
+
+  LOOP AT t_ztbmm_005.
+
+    CLEAR t_ztbmm_004.
+    READ TABLE t_ztbmm_004 WITH KEY werks = t_ztbmm_005-werks
+                                    lgort = t_ztbmm_005-lgort
+                                    charg = t_ztbmm_005-charg
+                                    chdll = t_ztbmm_005-chdll
+                                    BINARY SEARCH.
+
+    IF sy-subrc IS INITIAL.
+
+      CLEAR t_dados.
+      t_dados-werks = t_ztbmm_005-werks.
+      t_dados-lgort = t_ztbmm_005-lgort.
+      t_dados-charg = t_ztbmm_005-charg.
+      t_dados-chdll = t_ztbmm_005-chdll.
+      t_dados-bldat = t_ztbmm_004-bldat.
+      t_dados-clabs = t_ztbmm_005-clabs.
+      t_dados-erfmg = t_ztbmm_005-erfmg.
+      t_dados-matnr = t_ztbmm_005-matnr.
+      t_dados-meins = t_ztbmm_005-meins.
+
+      CLEAR t_makt.
+      READ TABLE t_makt WITH KEY matnr = t_ztbmm_005-matnr
+                                  BINARY SEARCH.
+      IF sy-subrc IS INITIAL.
+
+        t_dados-maktg = t_makt-maktg.
+
+      ENDIF.
+
+      APPEND t_dados.
+
+    ENDIF.
+
+  ENDLOOP.
+
+ENDFORM.                    " monta_dados_ztbmm_004
+
+*&---------------------------------------------------------------------*
+*&      Form  monta_dados_mchb
+*&---------------------------------------------------------------------*
+*       Monta dados a partir da tabela mchb
+*----------------------------------------------------------------------*
+FORM monta_dados_mchb.
+
+  SORT: t_makt      BY matnr,
+        t_mara      BY matnr.
+
+  REFRESH t_dados[].
+
+  LOOP AT t_mchb.
+
+    CLEAR t_dados.
+    t_dados-werks = t_mchb-werks.
+    t_dados-lgort = t_mchb-lgort.
+    t_dados-charg = t_mchb-charg.
+    t_dados-chdll = p_chdll.
+    t_dados-bldat = p_bldat.
+    t_dados-clabs = t_mchb-clabs.
+    t_dados-matnr = t_mchb-matnr.
+
+    CLEAR t_mara.
+    READ TABLE t_mara WITH KEY matnr = t_mchb-matnr
+                               BINARY SEARCH.
+    IF sy-subrc IS INITIAL.
+
+      t_dados-meins = t_mara-meins.
+
+    ENDIF.
+
+    CLEAR t_makt.
+    READ TABLE t_makt WITH KEY matnr = t_mchb-matnr
+                                BINARY SEARCH.
+    IF sy-subrc IS INITIAL.
+
+      t_dados-maktg = t_makt-maktg.
+
+    ENDIF.
+
+    APPEND t_dados.
+
+  ENDLOOP.
+
+ENDFORM.                    " monta_dados_mchb
+
+*&---------------------------------------------------------------------*
+*&      Form  monta_fieldcat_alv
+*&---------------------------------------------------------------------*
+*       Monta fieldcat ALV
+*----------------------------------------------------------------------*
+FORM monta_fieldcat_alv.
+
+  REFRESH t_fcat[].
+
+* Material
+  CLEAR wa_fcat.
+  wa_fcat-fieldname = 'MATNR'.
+  wa_fcat-col_pos   = '1'.
+  wa_fcat-edit      = 'X'.
+  wa_fcat-outputlen = '18'.
+  wa_fcat-ref_field = 'MATNR'.
+  wa_fcat-ref_table = 'MARA'.
+  wa_fcat-scrtext_s = text-007.
+  wa_fcat-scrtext_m = text-007.
+  wa_fcat-scrtext_l = text-007.
+  APPEND wa_fcat TO t_fcat.
+
+* Material
+  CLEAR wa_fcat.
+  wa_fcat-fieldname = 'MAKTG'.
+  wa_fcat-col_pos   = '2'.
+  wa_fcat-outputlen = '40'.
+  wa_fcat-scrtext_s = text-008.
+  wa_fcat-scrtext_m = text-008.
+  wa_fcat-scrtext_l = text-008.
+  APPEND wa_fcat TO t_fcat.
+
+* Unidade de Medida
+  CLEAR wa_fcat.
+  wa_fcat-fieldname = 'MEINS'.
+  wa_fcat-col_pos   = '3'.
+  wa_fcat-outputlen = '16'.
+  wa_fcat-JUST      = 'C'.
+  wa_fcat-scrtext_s = text-017.
+  wa_fcat-scrtext_m = text-017.
+  wa_fcat-scrtext_l = text-017.
+  APPEND wa_fcat TO t_fcat.
+
+* Saldo Atual
+  CLEAR wa_fcat.
+  wa_fcat-fieldname = 'CLABS'.
+  wa_fcat-inttype   = 'P'.
+  wa_fcat-intlen    = 10.
+  wa_fcat-decimals  = 3.
+  wa_fcat-outputlen = '16'.
+  wa_fcat-col_pos   = '4'.
+  wa_fcat-qfieldname = 'MEINS'.
+  wa_fcat-ifieldname = 'T_DADOS'.
+  wa_fcat-scrtext_s = text-009.
+  wa_fcat-scrtext_m = text-009.
+  wa_fcat-scrtext_l = text-009.
+  APPEND wa_fcat TO t_fcat.
+
+* Saldo Real
+  CLEAR wa_fcat.
+  wa_fcat-fieldname  = 'ERFMG'.
+  wa_fcat-inttype    = 'P'.
+  wa_fcat-intlen     = 10.
+  wa_fcat-decimals   = 3.
+  wa_fcat-outputlen  = '16'.
+  wa_fcat-col_pos    = '5'.
+  wa_fcat-edit       = 'X'.
+  wa_fcat-qfieldname = 'MEINS'.
+  wa_fcat-ifieldname = 'T_DADOS'.
+  wa_fcat-scrtext_s  = text-010.
+  wa_fcat-scrtext_m  = text-010.
+  wa_fcat-scrtext_l  = text-010.
+  APPEND wa_fcat TO t_fcat.
+
+ENDFORM.                    " monta_fieldcat_alv
+
+*&---------------------------------------------------------------------*
+*&      Form  exibir_relatorio_alv
+*&---------------------------------------------------------------------*
+*       Exibição do relatório ALV
+*----------------------------------------------------------------------*
+FORM exibir_relatorio_alv.
+
+  IF gr_container_d0100 IS INITIAL.
+
+    IF cl_gui_alv_grid=>offline( ) IS INITIAL.
+
+      CREATE OBJECT gr_container_d0100
+                    EXPORTING container_name = 'D0100_CONTAINER'.
+
+    ENDIF.
+
+    CREATE OBJECT gr_grid_d0100
+                  EXPORTING i_parent = gr_container_d0100.
+
+
+    CALL METHOD gr_grid_d0100->set_table_for_first_display
+      EXPORTING
+*        i_buffer_active     = ''
+*        i_bypassing_buffer  = ''
+*        i_consistency_check = ''
+*        is_variant          = ls_vari
+        i_save              = 'A'
+        i_default           = 'X'
+*        is_layout           = ls_layo
+*        is_print            = ls_prnt
+*        it_hyperlink        = lt_hype
+      CHANGING
+        it_outtab           = t_dados[]
+        it_fieldcatalog     = t_fcat.
+
+  ENDIF.
+
+ENDFORM.                    " exibir_relatorio_alv
+
+*&---------------------------------------------------------------------*
+*&      Form  user_command_0100
+*&---------------------------------------------------------------------*
+*       Trata os botões
+*----------------------------------------------------------------------*
+FORM user_command_0100.
+
+  DATA: l_okcode LIKE sy-ucomm.
+
+  l_okcode = v_okcode.
+
+  CASE l_okcode.
+
+    WHEN 'BACK' OR 'EXIT' OR 'CANC'.
+
+      CALL METHOD gr_grid_d0100->free.
+      CALL METHOD gr_container_d0100->free.
+
+      CALL METHOD cl_gui_cfw=>flush.
+
+      CLEAR gr_container_d0100.
+      CLEAR gr_grid_d0100.
+
+      SET SCREEN 0.
+      LEAVE SCREEN.
+
+    WHEN 'ATUALIZAR'.
+
+* Guarda registros anteriores
+      REFRESH t_dados_ant[].
+      t_dados_ant[] = t_dados[].
+
+      CALL METHOD gr_grid_d0100->check_changed_data.
+
+      PERFORM completa_item.
+
+      CALL METHOD gr_grid_d0100->refresh_table_display.
+
+    WHEN 'SAVE'.
+
+* Guarda registros anteriores
+      REFRESH t_dados_ant[].
+      t_dados_ant[] = t_dados[].
+
+      CALL METHOD gr_grid_d0100->check_changed_data.
+
+      PERFORM completa_item.
+
+* Valida dados
+      PERFORM valida_dados.
+
+      IF v_erro IS INITIAL.
+
+        PERFORM salva_dados.
+
+      ENDIF.
+
+      CALL METHOD gr_grid_d0100->refresh_table_display.
+
+  ENDCASE.
+
+ENDFORM.                    " user_command_0100
+
+*&---------------------------------------------------------------------*
+*&      Form  completa_descricao_mat
+*&---------------------------------------------------------------------*
+*       Completa a descrição do material onde falta
+*----------------------------------------------------------------------*
+FORM completa_item.
+
+  DATA: tl_makt    TYPE TABLE OF makt WITH HEADER LINE,
+        tl_mchb    TYPE TABLE OF mchb WITH HEADER LINE,
+        tl_mara    TYPE TABLE OF mara WITH HEADER LINE,
+        l_index    TYPE sy-tabix.
+
+  REFRESH tl_makt[].
+
+  IF NOT t_dados[] IS INITIAL.
+
+    REFRESH tl_makt[].
+    SELECT *
+      FROM makt
+      INTO TABLE tl_makt
+      FOR ALL ENTRIES IN t_dados
+      WHERE matnr = t_dados-matnr
+        AND spras = sy-langu.
+
+    REFRESH tl_mchb[].
+    SELECT *
+      FROM mchb
+      INTO TABLE tl_mchb
+      WHERE werks = p_werks
+        AND lgort = p_lgort
+        AND charg = p_charg.
+
+    REFRESH tl_mara[].
+    SELECT *
+      FROM mara
+      INTO TABLE tl_mara
+      FOR ALL ENTRIES IN t_dados
+      WHERE matnr = t_dados-matnr.
+
+
+  ENDIF.
+
+  LOOP AT t_dados WHERE maktg = ''.
+
+    CLEAR l_index.
+    l_index = sy-tabix.
+
+    t_dados-werks = p_werks.
+    t_dados-lgort = p_lgort.
+    t_dados-charg = p_charg.
+    t_dados-chdll = p_chdll.
+    t_dados-bldat = p_bldat.
+
+    CLEAR tl_makt.
+    READ TABLE tl_makt WITH KEY matnr = t_dados-matnr.
+    IF sy-subrc IS INITIAL.
+
+      t_dados-maktg = tl_makt-maktg.
+
+    ENDIF.
+
+    CLEAR tl_mchb.
+    READ TABLE tl_mchb WITH KEY matnr = t_dados-matnr.
+    IF sy-subrc IS INITIAL.
+
+      t_dados-clabs = tl_mchb-clabs.
+
+    ENDIF.
+
+    CLEAR tl_mara.
+    READ TABLE tl_mara WITH KEY matnr = t_dados-matnr.
+    IF sy-subrc IS INITIAL.
+
+      t_dados-meins = tl_mara-meins.
+
+    ENDIF.
+
+    MODIFY t_dados INDEX l_index.
+
+  ENDLOOP.
+
+ENDFORM.                    " completa_descricao_mat
+
+*&---------------------------------------------------------------------*
+*&      Form  salva_dados
+*&---------------------------------------------------------------------*
+*       Salva os dados
+*----------------------------------------------------------------------*
+FORM salva_dados.
+
+  DATA: tl_ztbmm_004    TYPE TABLE OF ztbmm_004 WITH HEADER LINE,
+        tl_ztbmm_005    TYPE TABLE OF ztbmm_005 WITH HEADER LINE,
+        vl_answer       TYPE c.
+
+  LOOP AT t_dados.
+
+    AT FIRST.
+
+      CLEAR tl_ztbmm_004.
+      tl_ztbmm_004-werks = p_werks.
+      tl_ztbmm_004-lgort = p_lgort.
+      tl_ztbmm_004-charg = p_charg.
+      tl_ztbmm_004-chdll = p_chdll.
+      tl_ztbmm_004-bldat = p_bldat.
+      tl_ztbmm_004-usnam = sy-uname.
+      APPEND tl_ztbmm_004.
+
+    ENDAT.
+
+    CLEAR tl_ztbmm_005.
+    tl_ztbmm_005-werks = p_werks.
+    tl_ztbmm_005-lgort = p_lgort.
+    tl_ztbmm_005-charg = p_charg.
+    tl_ztbmm_005-chdll = p_chdll.
+    tl_ztbmm_005-matnr = t_dados-matnr.
+    tl_ztbmm_005-clabs = t_dados-clabs.
+    tl_ztbmm_005-erfmg = t_dados-erfmg.
+    tl_ztbmm_005-meins = t_dados-meins.
+    APPEND tl_ztbmm_005.
+
+  ENDLOOP.
+
+  IF NOT tl_ztbmm_004[] IS INITIAL AND
+     NOT tl_ztbmm_005[] IS INITIAL.
+
+* Primeiro deleta os registros anteriores
+    DELETE FROM ztbmm_004 WHERE werks = p_werks
+                            AND lgort = p_lgort
+                            AND charg = p_charg
+                            AND chdll = p_chdll.
+
+    DELETE FROM ztbmm_005 WHERE werks = p_werks
+                            AND lgort = p_lgort
+                            AND charg = p_charg
+                            AND chdll = p_chdll.
+
+
+    MODIFY ztbmm_004 FROM TABLE tl_ztbmm_004.
+    MODIFY ztbmm_005 FROM TABLE tl_ztbmm_005.
+
+    IF sy-subrc IS INITIAL.
+
+      MESSAGE s000(z001) WITH text-011.
+
+    ENDIF.
+
+  ELSE.
+
+* Faz pergunta se deseja mesmo apagar todos os registros
+    CLEAR vl_answer.
+    CALL FUNCTION 'POPUP_TO_CONFIRM'
+         EXPORTING
+              text_question  = text-014
+              text_button_1  = text-015
+              text_button_2  = text-016
+         IMPORTING
+              answer         = vl_answer
+         EXCEPTIONS
+              text_not_found = 1.
+
+    IF vl_answer = '1'.
+
+* Caso o usuário delete todos os registros
+      DELETE FROM ztbmm_004 WHERE werks = p_werks
+                              AND lgort = p_lgort
+                              AND charg = p_charg
+                              AND chdll = p_chdll.
+
+      DELETE FROM ztbmm_005 WHERE werks = p_werks
+                              AND lgort = p_lgort
+                              AND charg = p_charg
+                              AND chdll = p_chdll.
+
+      IF sy-subrc IS INITIAL.
+
+        MESSAGE s000(z001) WITH text-011.
+
+      ENDIF.
+
+    ELSE.
+
+* Guarda registros anteriores
+      REFRESH t_dados[].
+      t_dados[] = t_dados_ant[].
+
+    ENDIF.
+
+  ENDIF.
+
+ENDFORM.                    " salva_dados
+
+*&---------------------------------------------------------------------*
+*&      Form  valida_dados
+*&---------------------------------------------------------------------*
+*       Validação dos dados
+*----------------------------------------------------------------------*
+FORM valida_dados.
+
+  DATA: tl_dados_aux    TYPE TABLE OF ty_dados,
+        vl_cont         TYPE i.
+
+* Limpa flag de erro
+  CLEAR v_erro.
+
+  LOOP AT t_dados.
+
+* Copia tabela para fazer verificação se existe materiais repetidos
+    REFRESH tl_dados_aux[].
+    tl_dados_aux[] = t_dados[].
+
+    DELETE tl_dados_aux WHERE matnr <> t_dados-matnr.
+
+    CLEAR vl_cont.
+    DESCRIBE TABLE tl_dados_aux LINES vl_cont.
+
+    IF vl_cont > 1.
+
+      MESSAGE i000(z001) WITH text-012 t_dados-matnr text-013.
+      v_erro = 'X'.
+      EXIT.
+
+    ENDIF.
+
+  ENDLOOP.
+
+ENDFORM.                    " valida_dados
